@@ -1,0 +1,97 @@
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_validate
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.svm import SVC
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, f1_score, roc_curve, auc, confusion_matrix
+from xgboost import XGBClassifier
+from catboost import CatBoostClassifier
+from lightgbm import LGBMClassifier
+from sklearn.preprocessing import StandardScaler
+
+# Read Excel file
+df = pd.read_excel('Training set (morgen).xlsx', sheet_name='Sheet1')
+
+# Separate features and labels
+X = df.iloc[:, 1:-1].values
+y = df.iloc[:, -1].values
+
+# Data standardization
+scaler = StandardScaler()
+X = scaler.fit_transform(X)
+
+# Initialize 5-fold cross-validation
+cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+# Initialize models
+models = {
+    'Random Forest': RandomForestClassifier(n_estimators=100),
+    'SVM': SVC(probability=True),
+    'Logistic Regression': LogisticRegression(),
+    'XGBoost': XGBClassifier(),
+    'CatBoost': CatBoostClassifier(silent=True),
+    'LightGBM': LGBMClassifier()
+}
+
+# Train models and evaluate results
+results = {}
+roc_curves = []
+confusion_matrices = {}
+
+for name, model in models.items():
+    # Use cross_validate to get different scoring metrics
+    scores = cross_validate(model, X, y, cv=cv, scoring=('accuracy', 'f1', 'roc_auc'), return_train_score=False,
+                            return_estimator=True)
+
+    # Calculate average evaluation metrics
+    accuracy = np.mean(scores['test_accuracy'])
+    f1 = np.mean(scores['test_f1'])
+    roc_auc = np.mean(scores['test_roc_auc'])
+
+    # Store average results
+    results[name] = {'Accuracy': accuracy, 'F1 Score': f1, 'AUC': roc_auc}
+
+    # Calculate confusion matrix
+    cm = np.zeros((2, 2), dtype=int)
+    for estimator, (train_index, test_index) in zip(scores['estimator'], cv.split(X, y)):
+        y_pred = estimator.predict(X[test_index])
+        cm += confusion_matrix(y[test_index], y_pred)
+    confusion_matrices[name] = cm
+
+    # ROC curve data (using the last split's test set)
+    y_proba = scores['estimator'][-1].predict_proba(X[test_index])[:, 1]
+    fpr, tpr, _ = roc_curve(y[test_index], y_proba)
+    roc_curves.append((fpr, tpr, name))
+
+# Plot ROC curves
+plt.figure(figsize=(10, 8))
+for fpr, tpr, label in roc_curves:
+    plt.plot(fpr, tpr, label=f'{label} (AUC = {auc(fpr, tpr):.2f})')
+plt.plot([0, 1], [0, 1], 'k--')
+plt.xlabel('False Positive Rate')
+plt.ylabel('True Positive Rate')
+plt.title('ROC Curves')
+plt.legend(loc='lower right')
+plt.savefig('ROC(Morgan_fingerprint_binary).png')
+plt.show()
+
+# Confusion matrix visualization
+fig, axes = plt.subplots(nrows=2, ncols=3, figsize=(15, 10))
+fig.suptitle('Confusion Matrices for Different Models', fontsize=16)
+for i, name in enumerate(models.keys()):
+    cm = confusion_matrices[name]
+    sns.heatmap(cm, annot=True, fmt='d', ax=axes[i // 3, i % 3], cbar=False)
+    axes[i // 3, i % 3].set_title(name)
+    axes[i // 3, i % 3].set_xlabel('Predicted labels')
+    axes[i // 3, i % 3].set_ylabel('True labels')
+
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])  # Adjust the padding between and around subplots.
+plt.savefig('Confusion_matrix(Morgan_fingerprint_binary).png')
+plt.show()
+
+# Save evaluation results to Excel
+results_df = pd.DataFrame(results).T
+results_df.to_excel('Model_performance(Morgan_fingerprint_binary).xlsx')
